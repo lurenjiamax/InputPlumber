@@ -35,8 +35,8 @@ use crate::{
         output_capability::OutputCapability,
         output_event::UinputOutputEvent,
         source::{
-            evdev::EventDevice, hidraw::HidRawDevice, iio::IioDevice, led::LedDevice,
-            tty::TtyDevice, SourceDevice,
+            evdev::EventDevice, fastrpc::FastRpcDevice, hidraw::HidRawDevice, iio::IioDevice,
+            led::LedDevice, tty::TtyDevice, SourceDevice,
         },
         target::TargetDeviceTypeId,
     },
@@ -1793,6 +1793,12 @@ impl CompositeDevice {
                         log::debug!("Adding TTY source device: {:?}", device.sysname());
                         let device = TtyDevice::new(device, self.client(), source_config.clone())?;
                         SourceDevice::Tty(device)
+                    }
+                    "fastrpc" => {
+                        log::debug!("Adding FastRPC source device: {:?}", device.sysname());
+                        let device =
+                            FastRpcDevice::new(device, self.client(), source_config.clone())?;
+                        SourceDevice::FastRpc(device)
                     }
                     _ => {
                         return Err(format!(
