@@ -151,6 +151,9 @@ pub struct CompositeDevice {
     /// Whether or not force feedback output events should be routed to
     /// supported source devices.
     ff_enabled: bool,
+    /// Per-device rumble multiplier and unscaled uploaded effects.
+    rumble_gain: f64,
+    rumble_effects: HashMap<i16, evdev::FFEffectData>,
     /// Set of available Force Feedback effect IDs that are not in use
     /// TODO: Just use the keys from ff_effect_id_source_map to determine next id
     ff_effect_ids: BTreeSet<i16>,
@@ -219,6 +222,8 @@ impl CompositeDevice {
             source_devices_used: Vec::new(),
             targets: CompositeDeviceTargets::new(conn, dbus_path, tx.into(), manager),
             ff_enabled: true,
+            rumble_gain: 1.0,
+            rumble_effects: HashMap::new(),
             ff_effect_ids: (0..64).collect(),
             ff_effect_id_source_map: HashMap::new(),
             intercept_activation_caps: vec![Capability::Gamepad(Gamepad::Button(
@@ -553,6 +558,13 @@ impl CompositeDevice {
                         log::info!("Setting force feedback enabled: {enabled:?}");
                         self.ff_enabled = enabled;
                     }
+                    CompositeCommand::GetRumbleGain(sender) => {
+                        let _ = sender.send(self.rumble_gain).await;
+                    }
+                    CompositeCommand::SetRumbleGain(gain, sender) => {
+                        let result = self.set_rumble_gain(gain).await;
+                        let _ = sender.send(result).await;
+                    }
                     CompositeCommand::Stop => {
                         log::debug!(
                             "Got STOP signal. Stopping CompositeDevice: {}",
@@ -789,6 +801,39 @@ impl CompositeDevice {
         Ok(())
     }
 
+    /// Update rumble gain using original amplitudes to avoid cumulative scaling.
+    async fn set_rumble_gain(&mut self, gain: f64) -> Result<(), String> {
+        if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
+            return Err("RumbleGain must be finite and between 0.0 and 2.0".into());
+        }
+        self.rumble_gain = gain;
+        let mut errors = Vec::new();
+        for (id, data) in &self.rumble_effects {
+            let Some(sources) = self.ff_effect_id_source_map.get(id) else {
+                continue;
+            };
+            for (source_id, source_effect_id) in sources {
+                let Some(source) = self.source_devices.get(source_id) else {
+                    continue;
+                };
+                if let Err(err) = source
+                    .update_effect(
+                        *source_effect_id,
+                        crate::input::output_event::with_rumble_gain(*data, gain),
+                    )
+                    .await
+                {
+                    errors.push(format!("{source_id}: {err}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
     /// Process a single output event from a target device.
     async fn process_output_event(&mut self, event: OutputEvent) -> Result<(), Box<dyn Error>> {
         log::trace!("Received output event: {:?}", event);
@@ -797,6 +842,8 @@ impl CompositeDevice {
         if let OutputEvent::Uinput(uinput) = event.borrow() {
             match uinput {
                 UinputOutputEvent::FFUpload(id, data, target_dev) => {
+                    let scaled =
+                        crate::input::output_event::with_rumble_gain(*data, self.rumble_gain);
                     // If this effect was already uploaded, just return the id
                     // back to the target device and inform all source devices
                     // to update the effect with the given data.
@@ -806,10 +853,11 @@ impl CompositeDevice {
                                 continue;
                             };
                             log::debug!("Updating effect {source_effect_id} from {source_id}");
-                            if let Err(e) = source.update_effect(*source_effect_id, *data).await {
+                            if let Err(e) = source.update_effect(*source_effect_id, scaled).await {
                                 log::error!("Error updating effect '{id}' on {source_id}: {e:?}");
                             }
                         }
+                        self.rumble_effects.insert(*id, *data);
                         target_dev.send(Some(*id))?;
                         return Ok(());
                     }
@@ -818,7 +866,7 @@ impl CompositeDevice {
                     let mut source_effect_ids = HashMap::new();
                     for (source_id, source) in self.source_devices.iter() {
                         log::debug!("Uploading effect to {source_id}");
-                        match source.upload_effect(*data).await {
+                        match source.upload_effect(scaled).await {
                             Ok(source_effect_id) => {
                                 // An effect ID of -1 indicates the device does not support
                                 // FF events.
@@ -847,6 +895,7 @@ impl CompositeDevice {
                         log::debug!("Uploaded effect with effect id {id}");
                         self.ff_effect_ids.remove(&id);
                         self.ff_effect_id_source_map.insert(id, source_effect_ids);
+                        self.rumble_effects.insert(id, *data);
                         target_dev.send(Some(id))?;
                     } else {
                         target_dev.send(None)?;
@@ -871,6 +920,7 @@ impl CompositeDevice {
                     log::debug!("Erased effect with effect id {effect_id}");
                     self.ff_effect_ids.insert(effect_id);
                     self.ff_effect_id_source_map.remove(&effect_id);
+                    self.rumble_effects.remove(&effect_id);
                 }
             }
 
@@ -888,6 +938,7 @@ impl CompositeDevice {
         }
 
         // Write the event to devices that are capable of handling it
+        let event = event.with_rumble_gain(self.rumble_gain);
         let event_capabilities = event.as_capability();
         for (source_id, source) in self.source_devices.iter() {
             // Check to see if the device supports processing the output event
@@ -1629,6 +1680,7 @@ impl CompositeDevice {
         for effect_id in freed_effect_ids {
             log::debug!("Freeing effect {effect_id} because last source was removed");
             self.ff_effect_id_source_map.remove(&effect_id);
+            self.rumble_effects.remove(&effect_id);
             self.ff_effect_ids.insert(effect_id);
         }
 

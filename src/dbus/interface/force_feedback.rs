@@ -21,9 +21,24 @@ pub trait ForceFeedbacker {
     ) -> impl Future<Output = Result<(), Box<dyn Error>>> + Send;
     fn rumble(&mut self, value: f64) -> impl Future<Output = Result<(), Box<dyn Error>>> + Send;
     fn stop(&mut self) -> impl Future<Output = Result<(), Box<dyn Error>>> + Send;
+    fn get_rumble_gain(&self) -> impl Future<Output = Result<f64, Box<dyn Error>>> + Send;
+    fn set_rumble_gain(
+        &mut self,
+        gain: f64,
+    ) -> impl Future<Output = Result<(), Box<dyn Error>>> + Send;
 }
 
 impl ForceFeedbacker for CompositeDeviceClient {
+    async fn get_rumble_gain(&self) -> Result<f64, Box<dyn Error>> {
+        Ok(CompositeDeviceClient::get_rumble_gain(self).await?)
+    }
+
+    async fn set_rumble_gain(&mut self, gain: f64) -> Result<(), Box<dyn Error>> {
+        CompositeDeviceClient::set_rumble_gain(self, gain)
+            .await?
+            .map_err(|err| err.into())
+    }
+
     async fn get_enabled(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.get_ff_enabled().await?)
     }
@@ -101,6 +116,34 @@ where
             .await
             .map_err(|err| fdo::Error::Failed(err.to_string()))?;
         Ok(())
+    }
+
+    /// Multiplier for rumble amplitudes, in the range 0.0..=2.0 (default 1.0).
+    #[zbus(property)]
+    async fn rumble_gain(&self) -> fdo::Result<f64> {
+        self.device
+            .get_rumble_gain()
+            .await
+            .map_err(|err| fdo::Error::Failed(err.to_string()))
+    }
+
+    #[zbus(property)]
+    async fn set_rumble_gain(
+        &mut self,
+        gain: f64,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] hdr: Option<Header<'_>>,
+    ) -> fdo::Result<()> {
+        if !gain.is_finite() || !(0.0..=2.0).contains(&gain) {
+            return Err(fdo::Error::InvalidArgs(
+                "RumbleGain must be finite and between 0.0 and 2.0".into(),
+            ));
+        }
+        check_polkit(conn, hdr, "org.shadowblip.Output.ForceFeedback.Enable").await?;
+        self.device
+            .set_rumble_gain(gain)
+            .await
+            .map_err(|err| fdo::Error::Failed(err.to_string()))
     }
 
     /// Send a simple rumble event

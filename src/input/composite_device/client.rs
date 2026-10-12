@@ -588,6 +588,20 @@ impl CompositeDeviceClient {
         Err(ClientError::ChannelClosed)
     }
 
+    /// Read the per-composite-device rumble amplitude multiplier.
+    pub async fn get_rumble_gain(&self) -> Result<f64, ClientError> {
+        let (tx, rx) = channel(1);
+        self.send(CompositeCommand::GetRumbleGain(tx)).await?;
+        Self::recv(rx).await.ok_or(ClientError::ChannelClosed)
+    }
+
+    /// Set the multiplier and wait until existing uploaded effects are updated.
+    pub async fn set_rumble_gain(&self, gain: f64) -> Result<Result<(), String>, ClientError> {
+        let (tx, rx) = channel(1);
+        self.send(CompositeCommand::SetRumbleGain(gain, tx)).await?;
+        Self::recv(rx).await.ok_or(ClientError::ChannelClosed)
+    }
+
     /// Enable or disable force feedback output events from being emitted
     pub async fn set_ff_enabled(&self, enabled: bool) -> Result<(), ClientError> {
         self.send(CompositeCommand::SetForceFeedbackEnabled(enabled))

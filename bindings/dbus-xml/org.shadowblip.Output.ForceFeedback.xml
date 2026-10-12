@@ -51,5 +51,7 @@
      Whether or not the device should send force feedback events
      -->
     <property name="Enabled" type="b" access="readwrite"/>
+    <!-- Rumble amplitude multiplier, 0.0 to 2.0; default 1.0. -->
+    <property name="RumbleGain" type="d" access="readwrite"/>
   </interface>
 </node>

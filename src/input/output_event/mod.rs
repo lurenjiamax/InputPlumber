@@ -1,10 +1,12 @@
 use std::sync::mpsc::Sender;
 
-use ::evdev::{FFEffectData, InputEvent};
+use ::evdev::{FFEffectData, FFEffectKind, InputEvent};
 
 use crate::drivers::{
     dualsense::hid_report::SetStatePackedOutputData,
-    steam_deck::hid_report::{PackedHapticPulseReport, PackedHapticReport, PackedRumbleReport, PadSide},
+    steam_deck::hid_report::{
+        PackedHapticPulseReport, PackedHapticReport, PackedRumbleReport, PadSide,
+    },
 };
 
 use super::output_capability::{Haptic, OutputCapability};
@@ -25,6 +27,43 @@ pub enum OutputEvent {
 }
 
 impl OutputEvent {
+    /// Scale rumble amplitudes without changing timing, flags or stop events.
+    /// Trackpad haptics, adaptive triggers and non-rumble FF effects are untouched.
+    pub fn with_rumble_gain(mut self, gain: f64) -> Self {
+        if gain == 1.0 {
+            return self;
+        }
+        let scale = |value: u16| {
+            (f64::from(value) * gain)
+                .round()
+                .clamp(0.0, u16::MAX as f64) as u16
+        };
+        match &mut self {
+            Self::GenericRumble {
+                weak_magnitude,
+                strong_magnitude,
+            } => {
+                *weak_magnitude = scale(*weak_magnitude);
+                *strong_magnitude = scale(*strong_magnitude);
+            }
+            Self::SteamDeckRumble(report) => {
+                use packed_struct::types::SizedInteger;
+                report.left_speed = scale(report.left_speed.to_primitive()).into();
+                report.right_speed = scale(report.right_speed.to_primitive()).into();
+            }
+            Self::DualSense(report) => {
+                report.rumble_emulation_left = (f64::from(report.rumble_emulation_left) * gain)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                report.rumble_emulation_right = (f64::from(report.rumble_emulation_right) * gain)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// Returns the capability of the output event
     pub fn as_capability(&self) -> Vec<OutputCapability> {
         match self {
@@ -103,6 +142,27 @@ impl OutputEvent {
             OutputEvent::GenericRumble { .. } => true,
         }
     }
+}
+
+/// Scale only rumble effects; preserve the original data for later gain changes.
+pub fn with_rumble_gain(mut effect: FFEffectData, gain: f64) -> FFEffectData {
+    if gain == 1.0 {
+        return effect;
+    }
+    if let FFEffectKind::Rumble {
+        strong_magnitude,
+        weak_magnitude,
+    } = &mut effect.kind
+    {
+        let scale = |value: u16| {
+            (f64::from(value) * gain)
+                .round()
+                .clamp(0.0, u16::MAX as f64) as u16
+        };
+        *strong_magnitude = scale(*strong_magnitude);
+        *weak_magnitude = scale(*weak_magnitude);
+    }
+    effect
 }
 
 #[derive(Debug, Clone)]
