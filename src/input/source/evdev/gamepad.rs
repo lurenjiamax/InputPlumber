@@ -33,8 +33,7 @@ pub struct GamepadEventDevice {
     axes_info: HashMap<AbsoluteAxisCode, AbsInfo>,
     translator: Option<EventTranslator>,
     ff_effects: HashMap<i16, FFEffect>,
-    ff_effects_dualsense: Option<i16>,
-    ff_effects_deck: Option<i16>,
+    // All reports translated into rumble share one physical effect slot.
     ff_effects_rumble: Option<i16>,
     hat_state: HashMap<AbsoluteAxisCode, i32>,
 }
@@ -72,8 +71,6 @@ impl GamepadEventDevice {
             axes_info,
             translator,
             ff_effects: HashMap::new(),
-            ff_effects_dualsense: None,
-            ff_effects_deck: None,
             ff_effects_rumble: None,
             hat_state: HashMap::new(),
         })
@@ -135,8 +132,14 @@ impl GamepadEventDevice {
         &mut self,
         report: SetStatePackedOutputData,
     ) -> Result<(), Box<dyn Error>> {
-        // If no effect was uploaded to handle DualSense force feedback, upload one.
-        if self.ff_effects_dualsense.is_none() {
+        if report.rumble_emulation_left == 0 && report.rumble_emulation_right == 0 {
+            for effect in self.ff_effects.values_mut() {
+                effect.stop()?;
+            }
+            return Ok(());
+        }
+        // Reuse the effect used by other translated rumble protocols.
+        if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
                 trigger: FFTrigger {
@@ -156,10 +159,10 @@ impl GamepadEventDevice {
             let effect = self.device.upload_ff_effect(effect_data)?;
             let id = effect.id() as i16;
             self.ff_effects.insert(id, effect);
-            self.ff_effects_dualsense = Some(id);
+            self.ff_effects_rumble = Some(id);
         }
 
-        let effect_id = self.ff_effects_dualsense.unwrap();
+        let effect_id = self.ff_effects_rumble.unwrap();
         let effect = self.ff_effects.get_mut(&effect_id).unwrap();
 
         // Stop playing the effect if values are set to zero
@@ -204,8 +207,14 @@ impl GamepadEventDevice {
 
     // Process Steam Deck FFB events.
     fn process_deck_ff(&mut self, report: PackedRumbleReport) -> Result<(), Box<dyn Error>> {
+        if report.left_speed.to_primitive() == 0 && report.right_speed.to_primitive() == 0 {
+            for effect in self.ff_effects.values_mut() {
+                effect.stop()?;
+            }
+            return Ok(());
+        }
         // If no effect was uploaded to handle Steam Deck force feedback, upload one.
-        if self.ff_effects_deck.is_none() {
+        if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
                 trigger: FFTrigger {
@@ -225,10 +234,10 @@ impl GamepadEventDevice {
             let effect = self.device.upload_ff_effect(effect_data)?;
             let id = effect.id() as i16;
             self.ff_effects.insert(id, effect);
-            self.ff_effects_deck = Some(id);
+            self.ff_effects_rumble = Some(id);
         }
 
-        let effect_id = self.ff_effects_deck.unwrap();
+        let effect_id = self.ff_effects_rumble.unwrap();
         let effect = self.ff_effects.get_mut(&effect_id).unwrap();
 
         let left_speed = report.left_speed.to_primitive();
@@ -280,6 +289,9 @@ impl GamepadEventDevice {
         strong_magnitude: u16,
         weak_magnitude: u16,
     ) -> Result<(), Box<dyn Error>> {
+        if strong_magnitude == 0 && weak_magnitude == 0 && self.ff_effects_rumble.is_none() {
+            return Ok(());
+        }
         if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
@@ -335,7 +347,7 @@ impl GamepadEventDevice {
     // Process Steam Deck Haptic events.
     fn process_haptic_ff(&mut self, report: PackedHapticReport) -> Result<(), Box<dyn Error>> {
         // If no effect was uploaded to handle Steam Deck force feedback, upload one.
-        if self.ff_effects_deck.is_none() {
+        if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
                 trigger: FFTrigger {
@@ -355,10 +367,10 @@ impl GamepadEventDevice {
             let effect = self.device.upload_ff_effect(effect_data)?;
             let id = effect.id() as i16;
             self.ff_effects.insert(id, effect);
-            self.ff_effects_deck = Some(id);
+            self.ff_effects_rumble = Some(id);
         }
 
-        let effect_id = self.ff_effects_deck.unwrap();
+        let effect_id = self.ff_effects_rumble.unwrap();
         let effect = self.ff_effects.get_mut(&effect_id).unwrap();
 
         let intensity = report.intensity.to_primitive() + 1;
@@ -430,7 +442,7 @@ impl GamepadEventDevice {
     // Process Steam Deck Haptic Pulse events. Real controller firmware times
     // this itself; we approximate it with the kernel's FF replay length.
     fn process_haptic_pulse_ff(&mut self, report: PackedHapticPulseReport) -> Result<(), Box<dyn Error>> {
-        if self.ff_effects_deck.is_none() {
+        if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
                 trigger: FFTrigger {
@@ -449,10 +461,10 @@ impl GamepadEventDevice {
             let effect = self.device.upload_ff_effect(effect_data)?;
             let id = effect.id() as i16;
             self.ff_effects.insert(id, effect);
-            self.ff_effects_deck = Some(id);
+            self.ff_effects_rumble = Some(id);
         }
 
-        let effect_id = self.ff_effects_deck.unwrap();
+        let effect_id = self.ff_effects_rumble.unwrap();
         let effect = self.ff_effects.get_mut(&effect_id).unwrap();
 
         // Gain is dB, -24 to +6.
@@ -778,6 +790,9 @@ impl SourceOutputDevice for GamepadEventDevice {
             return Ok(());
         }
         self.ff_effects.remove(&effect_id);
+        if self.ff_effects_rumble == Some(effect_id) {
+            self.ff_effects_rumble = None;
+        }
         Ok(())
     }
 }
@@ -787,7 +802,7 @@ impl Debug for GamepadEventDevice {
         f.debug_struct("GamepadEventDevice")
             .field("axes_info", &self.axes_info)
             .field("ff_effects", &self.ff_effects)
-            .field("ff_effects_dualsense", &self.ff_effects_dualsense)
+            .field("ff_effects_rumble", &self.ff_effects_rumble)
             .field("hat_state", &self.hat_state)
             .finish()
     }
