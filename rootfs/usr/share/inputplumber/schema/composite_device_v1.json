@@ -199,6 +199,9 @@
         "evdev": {
           "$ref": "#/definitions/Evdev"
         },
+        "fastrpc": {
+          "$ref": "#/definitions/FastRPC"
+        },
         "hidraw": {
           "$ref": "#/definitions/Hidraw"
         },
@@ -395,6 +398,20 @@
       },
       "required": [],
       "title": "Evdev"
+    },
+    "FastRPC": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Sysfs path of the FastRPC device, e.g. /sys/devices/virtual/misc/fastrpc-adsp",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "title": "FastRPC"
     },
     "Hidraw": {
       "type": "object",

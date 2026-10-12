@@ -16,8 +16,8 @@ use tokio::sync::mpsc::{self, error::TryRecvError};
 use crate::config;
 
 use self::{
-    client::SourceDeviceClient, command::SourceCommand, evdev::EventDevice, hidraw::HidRawDevice,
-    iio::IioDevice, tty::TtyDevice,
+    client::SourceDeviceClient, command::SourceCommand, evdev::EventDevice, fastrpc::FastRpcDevice,
+    hidraw::HidRawDevice, iio::IioDevice, tty::TtyDevice,
 };
 
 use super::{
@@ -32,6 +32,7 @@ use super::{
 pub mod client;
 pub mod command;
 pub mod evdev;
+pub mod fastrpc;
 pub mod hidraw;
 pub mod iio;
 pub mod led;
@@ -628,6 +629,7 @@ pub(crate) trait SourceDeviceCompatible {
 #[derive(Debug)]
 pub enum SourceDevice {
     Event(EventDevice),
+    FastRpc(FastRpcDevice),
     HidRaw(HidRawDevice),
     Iio(IioDevice),
     Led(LedDevice),
@@ -639,6 +641,7 @@ impl SourceDevice {
     pub fn get_device_ref(&self) -> DeviceInfoRef<'_> {
         match self {
             SourceDevice::Event(device) => device.get_device_ref(),
+            SourceDevice::FastRpc(device) => device.get_device_ref(),
             SourceDevice::HidRaw(device) => device.get_device_ref(),
             SourceDevice::Iio(device) => device.get_device_ref(),
             SourceDevice::Led(device) => device.get_device_ref(),
@@ -650,6 +653,7 @@ impl SourceDevice {
     pub fn get_id(&self) -> String {
         match self {
             SourceDevice::Event(device) => device.get_id(),
+            SourceDevice::FastRpc(device) => device.get_id(),
             SourceDevice::HidRaw(device) => device.get_id(),
             SourceDevice::Iio(device) => device.get_id(),
             SourceDevice::Led(device) => device.get_id(),
@@ -661,6 +665,7 @@ impl SourceDevice {
     pub fn get_persistent_id(&self) -> Option<String> {
         match self {
             SourceDevice::Event(device) => device.get_serial(),
+            SourceDevice::FastRpc(_) => None,
             SourceDevice::HidRaw(device) => device.get_serial(),
             SourceDevice::Iio(_) => None,
             SourceDevice::Led(_) => None,
@@ -672,6 +677,7 @@ impl SourceDevice {
     pub fn client(&self) -> SourceDeviceClient {
         match self {
             SourceDevice::Event(device) => device.client(),
+            SourceDevice::FastRpc(device) => device.client(),
             SourceDevice::HidRaw(device) => device.client(),
             SourceDevice::Iio(device) => device.client(),
             SourceDevice::Led(device) => device.client(),
@@ -683,6 +689,7 @@ impl SourceDevice {
     pub async fn run(self) -> Result<(), Box<dyn Error>> {
         match self {
             SourceDevice::Event(device) => device.run().await,
+            SourceDevice::FastRpc(device) => device.run().await,
             SourceDevice::HidRaw(device) => device.run().await,
             SourceDevice::Iio(device) => device.run().await,
             SourceDevice::Led(device) => device.run().await,
@@ -694,6 +701,7 @@ impl SourceDevice {
     pub fn get_capabilities(&self) -> Result<Vec<Capability>, InputError> {
         match self {
             SourceDevice::Event(device) => device.get_capabilities(),
+            SourceDevice::FastRpc(device) => device.get_capabilities(),
             SourceDevice::HidRaw(device) => device.get_capabilities(),
             SourceDevice::Iio(device) => device.get_capabilities(),
             SourceDevice::Led(device) => device.get_capabilities(),
@@ -705,6 +713,7 @@ impl SourceDevice {
     pub fn get_output_capabilities(&self) -> Result<Vec<OutputCapability>, OutputError> {
         match self {
             SourceDevice::Event(device) => device.get_output_capabilities(),
+            SourceDevice::FastRpc(device) => device.get_output_capabilities(),
             SourceDevice::HidRaw(device) => device.get_output_capabilities(),
             SourceDevice::Iio(device) => device.get_output_capabilities(),
             SourceDevice::Led(device) => device.get_output_capabilities(),
@@ -716,6 +725,7 @@ impl SourceDevice {
     pub fn get_device_path(&self) -> String {
         match self {
             SourceDevice::Event(device) => device.get_device_path(),
+            SourceDevice::FastRpc(device) => device.get_device_path(),
             SourceDevice::HidRaw(device) => device.get_device_path(),
             SourceDevice::Iio(device) => device.get_device_path(),
             SourceDevice::Led(device) => device.get_device_path(),

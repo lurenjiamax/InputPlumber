@@ -27,15 +27,15 @@ use crate::config::{
 };
 use crate::dbus::interface::{
     source::{
-        evdev::SourceEventDeviceInterface, hidraw::SourceHIDRawInterface,
-        iio_imu::SourceIioImuInterface, led::SourceLedInterface, tty::SourceTtyInterface,
-        udev::SourceUdevDeviceInterface,
+        evdev::SourceEventDeviceInterface, fastrpc::SourceFastRpcInterface,
+        hidraw::SourceHIDRawInterface, iio_imu::SourceIioImuInterface, led::SourceLedInterface,
+        tty::SourceTtyInterface, udev::SourceUdevDeviceInterface,
     },
     DBusInterfaceManager,
 };
 use crate::dmi::{data::DMIData, get_cpu_info};
 use crate::input::{
-    source::{evdev, hidraw, iio, led, tty},
+    source::{evdev, fastrpc, hidraw, iio, led, tty},
     target::{TargetDevice, TargetDeviceTypeId},
 };
 use crate::udev::{
@@ -1389,6 +1389,7 @@ impl Manager {
                 "iio" => iio::get_dbus_path(sys_name),
                 "leds" => led::get_dbus_path(sys_name),
                 "tty" => tty::get_dbus_path(sys_name),
+                "fastrpc" => fastrpc::get_dbus_path(sys_name),
                 _ => return Err(format!("Device subsystem not supported: {subsystem:?}").into()),
             };
             let conn = self.dbus.connection().clone();
@@ -1415,6 +1416,10 @@ impl Manager {
                 "tty" => {
                     let tty_iface = SourceTtyInterface::new(dev);
                     dbus.register(tty_iface);
+                }
+                "fastrpc" => {
+                    let fastrpc_iface = SourceFastRpcInterface::new(dev);
+                    dbus.register(fastrpc_iface);
                 }
                 _ => (),
             }
@@ -1596,6 +1601,24 @@ impl Manager {
                 }
             }
 
+            "fastrpc" => {
+                log::debug!(
+                    "FastRPC device added: {} ({})",
+                    device.name(),
+                    device.sysname()
+                );
+
+                // Check to see if the device is virtual
+                if device.is_virtual() {
+                    // note: FastRPC devices seem to always be virtual, allow it
+                    log::trace!(
+                        "{dev_name} ({dev_sysname}) is virtual, using it anyways (fastrpc)"
+                    );
+                } else {
+                    log::trace!("Device {dev_name} ({dev_sysname}) is real - {dev_path}");
+                }
+            }
+
             _ => {
                 return Err(format!("Device subsystem not supported: {subsystem:?}").into());
             }
@@ -1723,13 +1746,11 @@ impl Manager {
                 WatchEvent::Create { name, base_path } => {
                     let subsystem = {
                         match base_path.as_str() {
-                            "/dev" => {
-                                if !name.starts_with("hidraw") {
-                                    None
-                                } else {
-                                    Some("hidraw")
-                                }
-                            }
+                            "/dev" => match &name {
+                                x if x.starts_with("hidraw") => Some("hidraw"),
+                                x if x.starts_with("fastrpc") => Some("fastrpc"),
+                                _ => None,
+                            },
                             "/dev/input" => Some("input"),
 
                             _ => None,
@@ -1835,6 +1856,15 @@ impl Manager {
         let tty_devices = udev::discover_devices("tty")?;
         let tty_devices = tty_devices.into_iter().map(|dev| dev.into()).collect();
         Manager::discover_devices(cmd_tx, tty_devices).await?;
+
+        // FastRPC devices are part of the "misc" subsystem (but always have the "fastrpc" prefix)
+        let fastrpc_devices = udev::discover_devices("misc")?;
+        let fastrpc_devices = fastrpc_devices
+            .into_iter()
+            .filter(|x| x.sysname().to_string_lossy().starts_with("fastrpc"))
+            .map(|dev| dev.into())
+            .collect();
+        Manager::discover_devices(cmd_tx, fastrpc_devices).await?;
 
         Ok(())
     }
