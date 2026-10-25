@@ -1,4 +1,5 @@
 /target
+/build
 /.cache
 /dist
 /settings.mk

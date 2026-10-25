@@ -2,6 +2,7 @@
 version: 1
 kind: CompositeDevice
 name: AYN Thor
+single_source: false
 
 options:
   auto_manage: true
@@ -29,6 +30,18 @@ source_devices:
       name: gpio-keys-ayn
       phys_path: gpio-keys/input0
       handler: event*
+
+  - group: imu
+    fastrpc:
+      name: fastrpc-adsp
+      id: /sys/devices/virtual/misc/fastrpc-adsp
+    config:
+      imu:
+        # Post-libssc frame; physical mounting is not independently verified.
+        mount_matrix:
+          x: [1.0, 0.0, 0.0]
+          y: [0.0, 1.0, 0.0]
+          z: [0.0, 0.0, 1.0]
 
 target_devices:
   - xbox-elite

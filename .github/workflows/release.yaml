@@ -4,10 +4,16 @@ name: "🎉 Release"
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Thor prerelease tag (must match Cargo version, e.g. v0.82.0-thor.1)'
+        required: false
+        type: string
 
 # Jobs to run
 jobs:
   release:
+    if: github.repository == 'ShadowBlip/InputPlumber'
     name: 🎉 Publish to GitHub
     runs-on: ubuntu-latest
 
@@ -131,3 +137,59 @@ jobs:
           git add .SRCINFO PKGBUILD
           git commit -m "Update to $(grep '^pkgver=' PKGBUILD | cut -d'=' -f2)"
           git push origin master
+
+  thor-release:
+    name: Build and publish Thor aarch64 prerelease
+    if: github.repository != 'ShadowBlip/InputPlumber'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    concurrency:
+      group: thor-release-${{ inputs.release_tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate release request
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(awk -F '"' '/^version = / {print $2; exit}' Cargo.toml)
+          prefix="v${version}-thor."
+          [[ "$RELEASE_TAG" == "$prefix"* && "${RELEASE_TAG#"$prefix"}" =~ ^[1-9][0-9]*$ ]] || {
+            echo 'Supply a version-matching vVERSION-thor.N tag'; exit 1;
+          }
+          if git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Tag already exists; use a new release number'; exit 1
+          fi
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev libudev-dev libevdev-dev libiio-dev pkg-config libarchive-tools zstd
+          rustup toolchain install 1.92.0 --profile minimal
+          rustup default 1.92.0
+      - name: Build committed source and upstream archive
+        run: |
+          cargo build --locked --release --target aarch64-unknown-linux-gnu
+          make dist-archive TARGET_ARCH=aarch64-unknown-linux-gnu
+          target/aarch64-unknown-linux-gnu/release/inputplumber --version
+      - name: Package for Thorch
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: bash pkg/archlinux/package-thor.sh "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thor-aarch64-release
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "InputPlumber $RELEASE_TAG (Thor / aarch64)" \
+            --notes-file pkg/archlinux/THOR-RELEASE.md
