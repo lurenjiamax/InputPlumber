@@ -43,3 +43,25 @@ next poll. Driver failures during refresh use the usual source error handling.
 
 This initial transport is scoped to evdev gamepad sources. Hidraw-only controllers
 need an equivalent driver-specific raw transport before they can use this API.
+
+## Local Thor packaging
+
+`pkg/archlinux/thorch/PKGBUILD` packages the checkout's cross-built aarch64
+executable and maintained rootfs. Set `THORCH_INPUTPLUMBER_PACKAGE` to the existing
+Thorch package directory; its payload and restart drop-in remain the single
+maintenance location for Thor's controller layout and service settings.
+The package includes the executable checksum, source revision and local diff so
+existing unrelated hardware fixes included in a local build remain traceable.
+
+Build with an aarch64 GNU linker, a recent Rust toolchain and a target libudev
+sysroot. Set `PKG_CONFIG_SYSROOT_DIR`, `PKG_CONFIG_LIBDIR` and the target C compiler
+include path to that sysroot. Then package from the checkout root:
+
+```sh
+PKGDEST="$PWD/artifacts" BUILDDIR="$PWD/build" \
+  makepkg --config "$PWD/pkg/archlinux/thorch/makepkg.conf" \
+  --nodeps --force --dir pkg/archlinux/thorch
+```
+
+Install with `pacman -U`. Restart InputPlumber once to load the new API, with GPcal
+closed. No calibration values or saved calibration scripts need to be replaced.
