@@ -1,4 +1,5 @@
 pub mod blocked;
+pub mod calibration;
 pub mod gamepad;
 pub mod keyboard;
 pub mod touchscreen;

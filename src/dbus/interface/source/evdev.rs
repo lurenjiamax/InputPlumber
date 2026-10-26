@@ -226,6 +226,38 @@ impl SourceEventDeviceInterface {
         Ok(self.device.uniq())
     }
 
+    /// Suspend this source's normal events and start an owned raw calibration session.
+    async fn begin_calibration(
+        &self,
+        #[zbus(connection)] conn: &Connection,
+        #[zbus(header)] hdr: Header<'_>,
+    ) -> fdo::Result<()> {
+        crate::input::source::evdev::calibration::begin(&self.device.devnode(), conn, hdr).await
+    }
+
+    /// Read readiness, overflow, axis metadata, and queued unnormalized evdev events.
+    async fn read_calibration(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+    ) -> fdo::Result<(
+        bool,
+        bool,
+        Vec<crate::input::source::evdev::calibration::AxisInfo>,
+        Vec<crate::input::source::evdev::calibration::RawEvent>,
+    )> {
+        crate::input::source::evdev::calibration::read(&self.device.devnode(), hdr)
+    }
+
+    /// Re-query live kernel axis information after the hardware backend changes calibration.
+    async fn refresh_calibration(&self, #[zbus(header)] hdr: Header<'_>) -> fdo::Result<()> {
+        crate::input::source::evdev::calibration::refresh(&self.device.devnode(), hdr)
+    }
+
+    /// Release the session; the source refreshes its translator before normal output resumes.
+    async fn end_calibration(&self, #[zbus(header)] hdr: Header<'_>) -> fdo::Result<()> {
+        crate::input::source::evdev::calibration::end(&self.device.devnode(), hdr)
+    }
+
     /// Returns the set of supported keys reported by the device.
     ///
     /// For keyboards, this is the set of all possible keycodes the keyboard may emit. Controllers,

@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::os::fd::AsFd;
+use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, error::Error};
 
 use evdev::{
@@ -10,11 +11,13 @@ use nix::fcntl::{FcntlArg, OFlag};
 use packed_struct::types::SizedInteger;
 use packed_struct::PrimitiveEnum;
 
+use super::calibration::CalibrationState;
 use crate::config::capability_map::CapabilityMapConfigV2;
 use crate::drivers::steam_deck::hid_report::{
     CommandType, PackedHapticPulseReport, PackedHapticReport, PackedRumbleReport, PadSide,
 };
 use crate::input::event::evdev::translator::EventTranslator;
+use crate::input::event::value::InputValue;
 use crate::input::output_capability::{Haptic, OutputCapability, LED};
 use crate::{
     drivers::dualsense::hid_report::SetStatePackedOutputData,
@@ -36,6 +39,10 @@ pub struct GamepadEventDevice {
     // All reports translated into rumble share one physical effect slot.
     ff_effects_rumble: Option<i16>,
     hat_state: HashMap<AbsoluteAxisCode, i32>,
+    calibration: Arc<Mutex<CalibrationState>>,
+    calibrating: bool,
+    capability_map: Option<CapabilityMapConfigV2>,
+    output_state: HashMap<Capability, NativeEvent>,
 }
 
 impl GamepadEventDevice {
@@ -64,7 +71,11 @@ impl GamepadEventDevice {
         }
 
         // Create an event translator if a capability map was given
-        let translator = capability_map.map(|map| EventTranslator::new(&map, axes_info.clone()));
+        let translator = capability_map
+            .as_ref()
+            .map(|map| EventTranslator::new(map, axes_info.clone()));
+        let calibration = CalibrationState::register(path);
+        calibration.lock().unwrap().update_axes(&axes_info);
 
         Ok(Self {
             device,
@@ -73,6 +84,10 @@ impl GamepadEventDevice {
             ff_effects: HashMap::new(),
             ff_effects_rumble: None,
             hat_state: HashMap::new(),
+            calibration,
+            calibrating: false,
+            capability_map,
+            output_state: HashMap::new(),
         })
     }
 
@@ -441,7 +456,10 @@ impl GamepadEventDevice {
 
     // Process Steam Deck Haptic Pulse events. Real controller firmware times
     // this itself; we approximate it with the kernel's FF replay length.
-    fn process_haptic_pulse_ff(&mut self, report: PackedHapticPulseReport) -> Result<(), Box<dyn Error>> {
+    fn process_haptic_pulse_ff(
+        &mut self,
+        report: PackedHapticPulseReport,
+    ) -> Result<(), Box<dyn Error>> {
         if self.ff_effects_rumble.is_none() {
             let effect_data = FFEffectData {
                 direction: 0,
@@ -499,10 +517,72 @@ impl GamepadEventDevice {
     }
 }
 
-impl SourceInputDevice for GamepadEventDevice {
-    /// Poll the given input device for input events
-    fn poll(&mut self) -> Result<Vec<NativeEvent>, InputError> {
+impl GamepadEventDevice {
+    fn poll_input(&mut self) -> Result<Vec<NativeEvent>, InputError> {
         let mut native_events = vec![];
+
+        let (active, refresh) = {
+            let state = self.calibration.lock().unwrap();
+            (state.owner.is_some(), state.refresh)
+        };
+        if active || self.calibrating {
+            if refresh || active != self.calibrating {
+                self.axes_info = self
+                    .device
+                    .get_absinfo()
+                    .map_err(|error| error.to_string())?
+                    .collect();
+                self.calibration
+                    .lock()
+                    .unwrap()
+                    .update_axes(&self.axes_info);
+            }
+            if active != self.calibrating {
+                self.translator = self
+                    .capability_map
+                    .as_ref()
+                    .map(|map| EventTranslator::new(map, self.axes_info.clone()));
+                self.hat_state.clear();
+                if active {
+                    for (_, event) in self.output_state.drain() {
+                        let value = match event.get_value() {
+                            InputValue::Bool(_) => InputValue::Bool(false),
+                            InputValue::Float(_) => InputValue::Float(0.0),
+                            InputValue::Vector2 { .. } => InputValue::Vector2 {
+                                x: Some(0.0),
+                                y: Some(0.0),
+                            },
+                            _ => continue,
+                        };
+                        let neutral = match event.get_source_capability() {
+                            Some(source) => {
+                                NativeEvent::new_translated(source, event.as_capability(), value)
+                            }
+                            None => NativeEvent::new(event.as_capability(), value),
+                        };
+                        native_events.push(neutral);
+                    }
+                    for effect in self.ff_effects.values_mut() {
+                        if let Err(error) = effect.stop() {
+                            log::warn!("Cannot stop calibration source rumble: {error}");
+                        }
+                    }
+                }
+                self.calibrating = active;
+                self.calibration.lock().unwrap().ready = active;
+            }
+            if active {
+                match self.device.fetch_events() {
+                    Ok(events) => {
+                        let events: Vec<_> = events.collect();
+                        self.calibration.lock().unwrap().record(&events);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+                    Err(error) => return Err(error.to_string().into()),
+                }
+                return Ok(native_events);
+            }
+        }
 
         // Poll the translator for any scheduled events
         if let Some(translator) = self.translator.as_mut() {
@@ -565,6 +645,19 @@ impl SourceInputDevice for GamepadEventDevice {
         native_events.extend(translated_events);
 
         Ok(native_events)
+    }
+}
+
+impl SourceInputDevice for GamepadEventDevice {
+    fn poll(&mut self) -> Result<Vec<NativeEvent>, InputError> {
+        let events = self.poll_input()?;
+        if !self.calibrating {
+            for event in &events {
+                self.output_state
+                    .insert(event.as_capability(), event.clone());
+            }
+        }
+        Ok(events)
     }
 
     /// Returns the possible input events this device is capable of emitting
@@ -673,6 +766,9 @@ impl SourceOutputDevice for GamepadEventDevice {
     /// events that flow from an application (like a game) to the physical
     /// input device, such as force feedback events.
     fn write_event(&mut self, event: OutputEvent) -> Result<(), OutputError> {
+        if self.calibration.lock().unwrap().owner.is_some() {
+            return Ok(());
+        }
         log::trace!("Received output event: {:?}", event);
 
         // Only process output events if FF is supported
