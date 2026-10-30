@@ -12,10 +12,10 @@ provides=(inputplumber)
 conflicts=(inputplumber inputplumber-bin inputplumber-git)
 options=(!strip)
 _root="$(git -C "$startdir" rev-parse --show-toplevel)"
-_platform="${THORCH_INPUTPLUMBER_PACKAGE:?Set the maintained Thorch InputPlumber package directory}"
+_platform="$_root/pkg/archlinux/thorch"
 
 package() {
-  local binary="$_root/target/aarch64-unknown-linux-gnu/release/inputplumber"
+  local binary="${CARGO_TARGET_DIR:-$_root/target}/aarch64-unknown-linux-gnu/release/inputplumber"
   [[ $(readelf -h "$binary") == *AArch64* ]] || return 1
   cp -a "$_root/rootfs/." "$pkgdir/"
   cp -a "$_platform/payload/." "$pkgdir/"
