@@ -191,6 +191,6 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           gh release create "$RELEASE_TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" --target "$(git rev-parse HEAD)" \
             --prerelease --title "InputPlumber $RELEASE_TAG (Thor / aarch64)" \
             --notes-file pkg/archlinux/THOR-RELEASE.md
