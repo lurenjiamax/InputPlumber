@@ -39,9 +39,7 @@ fn deprecated_mount_matrix(config: Option<&config::SourceDevice>) -> Option<&con
 /// The sample rate requested in the per-device config, if one is set.
 /// The `config.imu.sample_rate` option takes precedence over the
 /// `iio.sample_rate` option.
-pub(super) fn sample_rate_from_config(
-    config: Option<&config::SourceDevice>,
-) -> Option<f64> {
+pub(super) fn sample_rate_from_config(config: Option<&config::SourceDevice>) -> Option<f64> {
     if let Some(rate) = config
         .and_then(|c| c.config.as_ref())
         .and_then(|c| c.imu.as_ref())
@@ -50,7 +48,9 @@ pub(super) fn sample_rate_from_config(
         return Some(rate);
     }
     #[allow(deprecated)]
-    let rate = config.and_then(|c| c.iio.as_ref()).and_then(|i| i.sample_rate)?;
+    let rate = config
+        .and_then(|c| c.iio.as_ref())
+        .and_then(|i| i.sample_rate)?;
     log::warn!("config option iio.sample_rate is deprecated, use <SourceDevice>.config.imu.sample_rate instead");
     Some(rate)
 }
@@ -99,11 +99,9 @@ fn translate_event(
             data,
             accel_correction,
         ),
-        iio_imu::event::Event::Gyroscope(data) => (
-            Capability::Gyroscope(Source::Center),
-            data,
-            gyro_correction,
-        ),
+        iio_imu::event::Event::Gyroscope(data) => {
+            (Capability::Gyroscope(Source::Center), data, gyro_correction)
+        }
     };
     NativeEvent::new(
         cap,
