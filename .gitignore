@@ -2,6 +2,7 @@
 /build
 /.cache
 /dist
+/artifacts/
 /settings.mk
 /.vscode
 /.direnv
